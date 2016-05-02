@@ -48,7 +48,8 @@
 ;; not lazy.
 
 (defn create-db! [db-name]
-  (r/run (r/db-create db-name) conn))
+  (-> (r/db-create db-name)
+      (r/run conn)))
 
 (defn drop-db! [db-name]
   (-> (r/db-drop db-name)
@@ -62,7 +63,8 @@
 (comment
 
   ;; Good for making unit/integration test dbs!
-  (time (do (create-db! "hi") (drop-db! "hi")))
+  (time (do (create-db! "hi")
+            (drop-db! "hi")))
 
   )
 
@@ -120,8 +122,6 @@
 
 
 
-
-
 ;; Lets put some customers in:
 (def Customer {:name s/Str :age s/Int})
 
@@ -133,6 +133,8 @@
   (insert-customer! {:name "Leo" :age 30})
   (insert-customer! {:name "Mike" :age 35})
   (insert-customer! {:naxe "RoundPeg" :age 30})
+
+
 
   )
 
@@ -199,8 +201,6 @@
 
 
 
-
-
 (dotimes [n 100] (insert-random-customer!))
 
 
@@ -239,17 +239,40 @@
 ;; find everyone who's older than 95.
 
 
+(dotimes [n 100] (insert-random-customer!))
 
+(comment
 
+  (-> (r/table "customers")
+      ;; Filter the table (one would normally use an index for that).
+      (r/filter (r/fn [c]
+                  (r/gt (r/get-field c "age") 97)))
+      ;; Update the books for all authors matching the above filter by appending a new title to the array field :books.
+      (r/get-field "name"))
+
+  )
 
 
 (comment
 
-  (-> (r/db "cljsyd")
-      (r/table "customers")
-      ;; Filter the table (one would normally use an index for that).
-      (r/filter #(< (:age %) 95))
-      ;; Update the books for all authors matching the above filter by appending a new title to the array field :books.
-      (r/get-field :name)
-      (r/run conn))
-  )
+  (let [docs (map #(hash-map :n %) (range 100))
+        changes-chan (-> (r/db test-db)
+                         (r/table test-table)
+                         (r/changes {:include-initial true})
+                         (r/run conn {:async? true}))
+        changes (-> (r/db test-db)
+                    (r/table test-table)
+                    (r/changes {:include-initial true})
+                    (r/run conn))]
+    (doseq [doc docs]
+      (r/run (-> (r/db test-db)
+                 (r/table test-table)
+                 (r/insert doc))
+        conn))
+    (let [received (s/stream)]
+      (go-loop []
+        (s/put! received (get-in (<! changes-chan) [:new_val :n]))
+        (recur))
+      (= (range 100)
+         (map #(get-in % [:new_val :n]) (take 100 changes))
+         (take 100 (s/stream->seq received))))))
